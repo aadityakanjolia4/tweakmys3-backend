@@ -313,26 +313,26 @@ def not_found(error):
 def internal_error(error):
     return jsonify({'error': 'Internal server error'}), 500
 
-if __name__ == '__main__':
-    # Check if AWS credentials are configured
-    if not s3_client:
-        print("\n⚠️  WARNING: AWS credentials not found!")
-        print("Please configure your AWS credentials using one of these methods:")
-        print("1. AWS CLI: aws configure")
-        print("2. Environment variables: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY")
-        print("3. IAM role (if running on EC2)")
-        print("4. AWS credentials file (~/.aws/credentials)")
-        print("\nThe server will start but S3 operations will fail without credentials.\n")
+# if __name__ == '__main__':
+#     # Check if AWS credentials are configured
+#     if not s3_client:
+#         print("\n⚠️  WARNING: AWS credentials not found!")
+#         print("Please configure your AWS credentials using one of these methods:")
+#         print("1. AWS CLI: aws configure")
+#         print("2. Environment variables: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY")
+#         print("3. IAM role (if running on EC2)")
+#         print("4. AWS credentials file (~/.aws/credentials)")
+#         print("\nThe server will start but S3 operations will fail without credentials.\n")
     
-    print("🚀 Starting S3 JSON Viewer API...")
-    print("📡 API Endpoints:")
-    print("   GET  /health - Health check")
-    print("   GET  /test-cors - CORS test endpoint")
-    print("   POST /api/get-json - Fetch JSON from S3 (bypasses CORS)")
-    print("   POST /api/save-json - Save JSON back to S3")
-    print("\n🌐 Server running at: http://localhost:5000")
-    print("🔗 Flask proxies JSON requests to/from S3 (no CORS issues)")
-    print("✅ CORS enabled for all origins (development mode)")
-    print("💾 Full S3 JSON editing: Load → Edit → Save back to S3")
+#     print("🚀 Starting S3 JSON Viewer API...")
+#     print("📡 API Endpoints:")
+#     print("   GET  /health - Health check")
+#     print("   GET  /test-cors - CORS test endpoint")
+#     print("   POST /api/get-json - Fetch JSON from S3 (bypasses CORS)")
+#     print("   POST /api/save-json - Save JSON back to S3")
+#     print("\n🌐 Server running at: http://localhost:5000")
+#     print("🔗 Flask proxies JSON requests to/from S3 (no CORS issues)")
+#     print("✅ CORS enabled for all origins (development mode)")
+#     print("💾 Full S3 JSON editing: Load → Edit → Save back to S3")
     
-    app.run(debug=True, host='0.0.0.0', port=5000) 
+#     app.run(debug=True, host='0.0.0.0', port=5000) 
