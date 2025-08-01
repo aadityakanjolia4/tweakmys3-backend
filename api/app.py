@@ -164,12 +164,8 @@ def get_json_endpoint():
 
             string_beautify = False
             if "data" in json_data and "response" in json_data["data"]:
-                print(type(json_data["data"]["response"]))
-                print(json_data["data"]["response"])
                 ans = json_data["data"]["response"]
                 ans = json.loads(ans)
-                print(type(ans))
-                print(ans)
                 json_data["data"]["response"] = ans
                 string_beautify = True
 
@@ -259,15 +255,11 @@ def save_json_endpoint():
         try:
             # Convert JSON data to string with proper formatting
             if string_beautify:
-                print(json_data)
-                print(type(json_data))
-                print(json_data["data"]["response"])
-                print(type(json_data["data"]["response"]))
+
                 ans = json_data["data"]["response"]
                 ans = json.dumps(ans, indent=2)
                 json_data["data"]["response"] = ans
             json_string = json.dumps(json_data, indent=2, ensure_ascii=False)
-            print(type(json_string))
             # Save to S3
             response = s3_client.put_object(
                 Bucket=bucket_name,
