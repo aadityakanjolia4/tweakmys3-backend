@@ -161,7 +161,18 @@ def get_json_endpoint():
             json_data = json.loads(content)
             
             logger.info(f"Successfully retrieved JSON from s3://{bucket_name}/{object_key}")
-            
+
+            string_beautify = False
+            if "data" in json_data and "response" in json_data["data"]:
+                print(type(json_data["data"]["response"]))
+                print(json_data["data"]["response"])
+                ans = json_data["data"]["response"]
+                ans = json.loads(ans)
+                print(type(ans))
+                print(ans)
+                json_data["data"]["response"] = ans
+                string_beautify = True
+
             return jsonify({
                 'success': True,
                 'json_data': json_data,
@@ -169,7 +180,8 @@ def get_json_endpoint():
                 'key': object_key,
                 'content_type': response.get('ContentType', 'application/json'),
                 'last_modified': response.get('LastModified').isoformat() if response.get('LastModified') else None,
-                'size': response.get('ContentLength', 0)
+                'size': response.get('ContentLength', 0),
+                'string_beautify' : string_beautify
             })
         
         except ClientError as e:
@@ -215,7 +227,8 @@ def save_json_endpoint():
         
         s3_url = data.get('s3_url')
         json_data = data.get('json_data')
-        
+        string_beautify = data.get('string_beautify', False)
+
         logger.info(f"🔧 DEBUG: s3_url = {s3_url}")
         logger.info(f"🔧 DEBUG: json_data type = {type(json_data)}")
         
@@ -245,8 +258,16 @@ def save_json_endpoint():
         
         try:
             # Convert JSON data to string with proper formatting
+            if string_beautify:
+                print(json_data)
+                print(type(json_data))
+                print(json_data["data"]["response"])
+                print(type(json_data["data"]["response"]))
+                ans = json_data["data"]["response"]
+                ans = json.dumps(ans, indent=2)
+                json_data["data"]["response"] = ans
             json_string = json.dumps(json_data, indent=2, ensure_ascii=False)
-            
+            print(type(json_string))
             # Save to S3
             response = s3_client.put_object(
                 Bucket=bucket_name,
