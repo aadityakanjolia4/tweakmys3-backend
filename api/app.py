@@ -7,8 +7,9 @@ import os
 import json
 from urllib.parse import urlparse
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
+import jwt
 
 # Load environment variables from .env file
 load_dotenv()
@@ -18,9 +19,15 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
+app.secret_key = os.getenv('FLASK_SECRET_KEY', 'your-secret-key-change-this')
+
+# JWT Configuration
+JWT_SECRET_KEY = app.secret_key  # Use same key or separate
+JWT_ALGORITHM = 'HS256'
+JWT_EXPIRATION_HOURS = 1  # Token expires in 1 hour
 
 # Enable CORS for all routes - comprehensive configuration for development
-CORS(app)
+CORS(app, supports_credentials=True)
     #  resources={
     #      r"/api/*": {
     #          "origins": "*",
@@ -50,6 +57,48 @@ except NoCredentialsError:
 #     response.headers.add('Access-Control-Allow-Methods', 'GET,POST,OPTIONS,PUT,DELETE')
 #     response.headers.add('Access-Control-Allow-Credentials', 'false')
 #     return response
+
+def check_credentials(username, password):
+    """Check if provided credentials match environment variables"""
+    expected_username = os.getenv('APP_USERNAME')
+    expected_password = os.getenv('APP_PASSWORD')
+    
+    if not expected_username or not expected_password:
+        logger.error("APP_USERNAME and APP_PASSWORD environment variables not set")
+        return False
+    
+    return username == expected_username and password == expected_password
+
+# --- JWT Token Functions ---
+def create_token(username):
+    """Generate JWT token for authenticated user"""
+    payload = {
+        "user": username,
+        "exp": datetime.utcnow() + timedelta(hours=JWT_EXPIRATION_HOURS),
+        "iat": datetime.utcnow()  # Issued at time
+    }
+    return jwt.encode(payload, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
+
+def verify_token(token):
+    """Verify JWT token and return username if valid"""
+    try:
+        decoded = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
+        return decoded.get("user")
+    except jwt.ExpiredSignatureError:
+        logger.warning("JWT token expired")
+        return None
+    except jwt.InvalidTokenError as e:
+        logger.warning(f"Invalid JWT token: {str(e)}")
+        return None
+
+def get_current_user():
+    """Get current user from Authorization header"""
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return None
+    
+    token = auth_header.split(" ")[1]
+    return verify_token(token)
 
 def parse_s3_url(s3_url):
     """
@@ -99,6 +148,53 @@ def parse_s3_url(s3_url):
 
 
 
+@app.route('/api/login', methods=['POST'])
+def login():
+    """Login endpoint to authenticate user and return JWT token"""
+    try:
+        if not request.is_json:
+            return jsonify({'error': 'Request must be JSON'}), 400
+        
+        data = request.get_json()
+        username = data.get('username')
+        password = data.get('password')
+        
+        if not username or not password:
+            return jsonify({'error': 'Username and password are required'}), 400
+        
+        if check_credentials(username, password):
+            token = create_token(username)
+            logger.info(f"User {username} logged in successfully")
+            return jsonify({
+                'success': True,
+                'message': 'Login successful',
+                'username': username,
+                'token': token
+            })
+        else:
+            logger.warning(f"Failed login attempt for username: {username}")
+            return jsonify({'error': 'Invalid username or password'}), 401
+    
+    except Exception as e:
+        logger.error(f"Error in login endpoint: {str(e)}")
+        return jsonify({'error': 'Login failed'}), 500
+
+@app.route('/api/logout', methods=['POST'])
+def logout():
+    """Logout endpoint - JWT tokens are stateless, client should discard token"""
+    # With JWT, logout is handled client-side by removing the token
+    # No server-side session to clear
+    return jsonify({'success': True, 'message': 'Logged out successfully'})
+
+@app.route('/api/auth-status', methods=['GET'])
+def auth_status():
+    """Check authentication status using JWT token"""
+    user = get_current_user()
+    return jsonify({
+        'authenticated': user is not None,
+        'username': user if user else None
+    })
+
 @app.route('/health', methods=['GET'])
 def health_check():
     """Health check endpoint"""
@@ -106,7 +202,8 @@ def health_check():
         'status': 'healthy',
         'message': 'S3 JSON Viewer API is running',
         's3_client_available': s3_client is not None,
-        'cors': 'enabled'
+        'cors': 'enabled',
+        'auth_required': True
     })
 
 @app.route('/test-cors', methods=['GET', 'POST'])
@@ -125,6 +222,11 @@ def get_json_endpoint():
     Fetch JSON directly from S3 and return to frontend (bypasses CORS)
     Expected JSON payload: {"s3_url": "s3://bucket/key"}
     """
+    # Check authentication using JWT token
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'Authentication required'}), 401
+
     try:
         # Validate request
         if not request.is_json:
@@ -212,6 +314,11 @@ def save_json_endpoint():
         "json_data": {...}
     }
     """
+    # Check authentication using JWT token
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'Authentication required'}), 401
+
     logger.info("🔧 DEBUG: save_json_endpoint called")
     try:
         # Validate request
@@ -255,7 +362,6 @@ def save_json_endpoint():
         try:
             # Convert JSON data to string with proper formatting
             if string_beautify:
-
                 ans = json_data["data"]["response"]
                 ans = json.dumps(ans, indent=2)
                 json_data["data"]["response"] = ans
@@ -312,6 +418,9 @@ def save_json_endpoint():
 
 @app.route('/api/get-json', methods=['OPTIONS'])
 @app.route('/api/save-json', methods=['OPTIONS'])
+@app.route('/api/login', methods=['OPTIONS'])
+@app.route('/api/logout', methods=['OPTIONS'])
+@app.route('/api/auth-status', methods=['OPTIONS'])
 @app.route('/health', methods=['OPTIONS'])
 @app.route('/test-cors', methods=['OPTIONS'])
 def handle_options():
@@ -326,26 +435,5 @@ def not_found(error):
 def internal_error(error):
     return jsonify({'error': 'Internal server error'}), 500
 
-# if __name__ == '__main__':
-#     # Check if AWS credentials are configured
-#     if not s3_client:
-#         print("\n⚠️  WARNING: AWS credentials not found!")
-#         print("Please configure your AWS credentials using one of these methods:")
-#         print("1. AWS CLI: aws configure")
-#         print("2. Environment variables: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY")
-#         print("3. IAM role (if running on EC2)")
-#         print("4. AWS credentials file (~/.aws/credentials)")
-#         print("\nThe server will start but S3 operations will fail without credentials.\n")
-    
-#     print("🚀 Starting S3 JSON Viewer API...")
-#     print("📡 API Endpoints:")
-#     print("   GET  /health - Health check")
-#     print("   GET  /test-cors - CORS test endpoint")
-#     print("   POST /api/get-json - Fetch JSON from S3 (bypasses CORS)")
-#     print("   POST /api/save-json - Save JSON back to S3")
-#     print("\n🌐 Server running at: http://localhost:5000")
-#     print("🔗 Flask proxies JSON requests to/from S3 (no CORS issues)")
-#     print("✅ CORS enabled for all origins (development mode)")
-#     print("💾 Full S3 JSON editing: Load → Edit → Save back to S3")
-    
-#     app.run(debug=True, host='0.0.0.0', port=5000) 
+if __name__ == '__main__':
+    app.run(debug=True, host='0.0.0.0', port=5000) 
