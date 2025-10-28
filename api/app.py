@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, session
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 import boto3
 from botocore.exceptions import ClientError, NoCredentialsError
@@ -7,8 +7,9 @@ import os
 import json
 from urllib.parse import urlparse
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
+import jwt
 
 # Load environment variables from .env file
 load_dotenv()
@@ -19,6 +20,11 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 app.secret_key = os.getenv('FLASK_SECRET_KEY', 'your-secret-key-change-this')
+
+# JWT Configuration
+JWT_SECRET_KEY = app.secret_key  # Use same key or separate
+JWT_ALGORITHM = 'HS256'
+JWT_EXPIRATION_HOURS = 1  # Token expires in 1 hour
 
 # Enable CORS for all routes - comprehensive configuration for development
 CORS(app, supports_credentials=True)
@@ -63,14 +69,36 @@ def check_credentials(username, password):
     
     return username == expected_username and password == expected_password
 
-def require_auth(f):
-    """Decorator to require authentication for protected routes"""
-    def decorated_function(*args, **kwargs):
-        if not session.get('authenticated'):
-            return jsonify({'error': 'Authentication required'}), 401
-        return f(*args, **kwargs)
-    decorated_function.__name__ = f.__name__
-    return decorated_function
+# --- JWT Token Functions ---
+def create_token(username):
+    """Generate JWT token for authenticated user"""
+    payload = {
+        "user": username,
+        "exp": datetime.utcnow() + timedelta(hours=JWT_EXPIRATION_HOURS),
+        "iat": datetime.utcnow()  # Issued at time
+    }
+    return jwt.encode(payload, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
+
+def verify_token(token):
+    """Verify JWT token and return username if valid"""
+    try:
+        decoded = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
+        return decoded.get("user")
+    except jwt.ExpiredSignatureError:
+        logger.warning("JWT token expired")
+        return None
+    except jwt.InvalidTokenError as e:
+        logger.warning(f"Invalid JWT token: {str(e)}")
+        return None
+
+def get_current_user():
+    """Get current user from Authorization header"""
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return None
+    
+    token = auth_header.split(" ")[1]
+    return verify_token(token)
 
 def parse_s3_url(s3_url):
     """
@@ -122,7 +150,7 @@ def parse_s3_url(s3_url):
 
 @app.route('/api/login', methods=['POST'])
 def login():
-    """Login endpoint to authenticate user"""
+    """Login endpoint to authenticate user and return JWT token"""
     try:
         if not request.is_json:
             return jsonify({'error': 'Request must be JSON'}), 400
@@ -135,13 +163,13 @@ def login():
             return jsonify({'error': 'Username and password are required'}), 400
         
         if check_credentials(username, password):
-            session['authenticated'] = True
-            session['username'] = username
+            token = create_token(username)
             logger.info(f"User {username} logged in successfully")
             return jsonify({
                 'success': True,
                 'message': 'Login successful',
-                'username': username
+                'username': username,
+                'token': token
             })
         else:
             logger.warning(f"Failed login attempt for username: {username}")
@@ -153,16 +181,18 @@ def login():
 
 @app.route('/api/logout', methods=['POST'])
 def logout():
-    """Logout endpoint"""
-    session.clear()
+    """Logout endpoint - JWT tokens are stateless, client should discard token"""
+    # With JWT, logout is handled client-side by removing the token
+    # No server-side session to clear
     return jsonify({'success': True, 'message': 'Logged out successfully'})
 
 @app.route('/api/auth-status', methods=['GET'])
 def auth_status():
-    """Check authentication status"""
+    """Check authentication status using JWT token"""
+    user = get_current_user()
     return jsonify({
-        'authenticated': session.get('authenticated', False),
-        'username': session.get('username', None)
+        'authenticated': user is not None,
+        'username': user if user else None
     })
 
 @app.route('/health', methods=['GET'])
@@ -187,12 +217,16 @@ def test_cors():
     })
 
 @app.route('/api/get-json', methods=['POST']) 
-@require_auth
 def get_json_endpoint():
     """
     Fetch JSON directly from S3 and return to frontend (bypasses CORS)
     Expected JSON payload: {"s3_url": "s3://bucket/key"}
     """
+    # Check authentication using JWT token
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'Authentication required'}), 401
+
     try:
         # Validate request
         if not request.is_json:
@@ -272,7 +306,6 @@ def get_json_endpoint():
 
 
 @app.route('/api/save-json', methods=['POST'])
-@require_auth
 def save_json_endpoint():
     """
     Save JSON data back to S3
@@ -281,6 +314,11 @@ def save_json_endpoint():
         "json_data": {...}
     }
     """
+    # Check authentication using JWT token
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'Authentication required'}), 401
+
     logger.info("🔧 DEBUG: save_json_endpoint called")
     try:
         # Validate request
