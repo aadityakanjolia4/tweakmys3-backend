@@ -257,31 +257,76 @@ def get_json_endpoint():
         try:
             response = s3_client.get_object(Bucket=bucket_name, Key=object_key)
             content = response['Body'].read().decode('utf-8')
-            
-            # Try to parse as JSON to validate
-            import json
-            json_data = json.loads(content)
-            
-            logger.info(f"Successfully retrieved JSON from s3://{bucket_name}/{object_key}")
 
-            string_beautify = False
-            if "data" in json_data and "response" in json_data["data"]:
-                ans = json_data["data"]["response"]
-                ans = json.loads(ans)
-                json_data["data"]["response"] = ans
-                string_beautify = True
+            # First try JSON
+            def looks_like_markdown(text):
+                try:
+                    if not isinstance(text, str):
+                        return False
+                    md_indicators = [
+                        r"^# +",           # headings
+                        r"\*\*.+\*\*",   # bold
+                        r"[_*].+[_*]",     # italic
+                        r"```[\s\S]*?```", # code fences
+                        r"^- ",            # bullets
+                        r"^\d+\. ",      # numbered list
+                        r"\[.+\]\(.+\)", # links
+                        r"^> ",            # blockquote
+                    ]
+                    import re
+                    for pat in md_indicators:
+                        if re.search(pat, text, flags=re.MULTILINE):
+                            return True
+                    return False
+                except Exception:
+                    return False
 
-            return jsonify({
-                'success': True,
-                'json_data': json_data,
-                'bucket': bucket_name,
-                'key': object_key,
-                'content_type': response.get('ContentType', 'application/json'),
-                'last_modified': response.get('LastModified').isoformat() if response.get('LastModified') else None,
-                'size': response.get('ContentLength', 0),
-                'string_beautify' : string_beautify
-            })
-        
+            try:
+                import json
+                json_data = json.loads(content)
+
+                logger.info(f"Successfully retrieved JSON from s3://{bucket_name}/{object_key}")
+
+                string_beautify = False
+                response_is_markdown = False
+                if "data" in json_data and "response" in json_data.get("data", {}):
+                    ans = json_data["data"]["response"]
+                    # If nested response is a JSON string, parse it
+                    try:
+                        parsed_ans = json.loads(ans)
+                        json_data["data"]["response"] = parsed_ans
+                        string_beautify = True
+                    except Exception:
+                        # Not JSON. Check if markdown-like
+                        if looks_like_markdown(ans):
+                            response_is_markdown = True
+
+                return jsonify({
+                    'success': True,
+                    'data_type': 'json',
+                    'json_data': json_data,
+                    'response_is_markdown': response_is_markdown,
+                    'bucket': bucket_name,
+                    'key': object_key,
+                    'content_type': response.get('ContentType', 'application/json'),
+                    'last_modified': response.get('LastModified').isoformat() if response.get('LastModified') else None,
+                    'size': response.get('ContentLength', 0),
+                    'string_beautify': string_beautify
+                })
+            except Exception:
+                # Not JSON - treat as text/markdown
+                logger.info(f"Non-JSON content from s3://{bucket_name}/{object_key}; returning as text/markdown")
+                return jsonify({
+                    'success': True,
+                    'data_type': 'markdown',
+                    'text_content': content,
+                    'bucket': bucket_name,
+                    'key': object_key,
+                    'content_type': response.get('ContentType', 'text/plain'),
+                    'last_modified': response.get('LastModified').isoformat() if response.get('LastModified') else None,
+                    'size': response.get('ContentLength', 0)
+                })
+
         except ClientError as e:
             error_code = e.response['Error']['Code']
             if error_code == 'NoSuchKey':
@@ -291,8 +336,6 @@ def get_json_endpoint():
             else:
                 return jsonify({'error': f"AWS Error: {str(e)}"}), 500
         
-        except json.JSONDecodeError as e:
-            return jsonify({'error': f"Invalid JSON format: {str(e)}"}), 400
     
     except Exception as e:
         logger.error(f"Error in get_json_endpoint: {str(e)}")
@@ -436,4 +479,4 @@ def internal_error(error):
     return jsonify({'error': 'Internal server error'}), 500
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000) 
+    app.run(debug=True, host='0.0.0.0', port=4000) 
